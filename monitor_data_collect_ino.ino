@@ -1,9 +1,9 @@
 /////////////////////////////////////////////////////////////
-//        WATER QUALITY MONITORING SYSTEM                  //
-//             ESP32-S3 + LoRa RAK3172                    //
+//            WATER QUALITY MONITORING SYSTEM              //
+//                ESP32-S3 + LoRa RAK3172                  //
 //             --------------------------------            //
-// Sensors: Nitrate, pH, Temperature, Turbidity,           //
-//          Conductivity                                   //
+//     Sensors: Nitrate, pH, Temperature, Turbidity,       //
+//                     Conductivity                        //
 /////////////////////////////////////////////////////////////
 
 //
