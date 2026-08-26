@@ -1,440 +1,493 @@
-       /////////////////////////////////////////////
-      //    GSM & SMS Enabled Water Pollution    //
-     //         Monitor w/ Neuton TinyML        //
-    //             ---------------             //
-   //          (Arduino MKR GSM 1400)         //
-  //             by Kutluhan Aktar           //
- //                                         //
-/////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+//        WATER QUALITY MONITORING SYSTEM                  //
+//             ESP32-S3 + LoRa RAK3172                    //
+//             --------------------------------            //
+// Sensors: Nitrate, pH, Temperature, Turbidity,           //
+//          Conductivity                                   //
+/////////////////////////////////////////////////////////////
 
-//
-// Via MKR GSM 1400, collate water quality data from resources over GPRS to train a Neuton model and run the model to transmit output via SMS.
-//
-// For more information:
-// https://www.theamplituhedron.com/projects/GSM_SMS_Enabled_Water_Pollution_Monitor_w_Neuton_TinyML
-//
 //
 // Connections
-// Arduino MKR GSM 1400 :
-//                                DFRobot Analog ORP Sensor
-// A1  --------------------------- Signal
-//                                DFRobot Analog pH Sensor Pro Kit
-// A2  --------------------------- Signal
-//                                DFRobot Analog TDS Sensor
-// A3  --------------------------- Signal
-//                                DFRobot Analog Turbidity Sensor
-// A4  --------------------------- Signal
-//                                DS18B20 Waterproof Temperature Sensor
-// D1  --------------------------- Data
-//                                SH1106 OLED Display (128x64)
-// MOSI  ------------------------- SDA
-// SCK   ------------------------- SCK
-// D10   ------------------------- RST
-// D11   ------------------------- DC
-// D12   ------------------------- CS
-//                                5mm Common Anode RGB LED
-// D2  --------------------------- R
-// D3  --------------------------- G
-// D4  --------------------------- B  
-//                                Control Button (1)
-// D5  --------------------------- +
-//                                Control Button (2)
-// D6  --------------------------- +
-//                                Control Button (3)
-// D7  --------------------------- +
+// ESP32-S3 DevKit :
+//
+//                         Nitrate ISE / Interface
+// GPIO_NITRATE  --------- Signal
+//
+//                         Analog pH Sensor
+// GPIO_PH       --------- Signal
+//
+//                         DS18B20 Temperature Sensor
+// GPIO_TEMP     --------- Data
+//
+//                         Gravity Analog Turbidity Sensor
+// GPIO_TURBIDITY -------- Signal
+//
+//                         Conductivity Sensor / Interface
+// GPIO_CONDUCTIVITY ----- Signal
+//
+//                         LoRa RAK3172
+// ESP32 TX -------------- RAK3172 RX
+// ESP32 RX -------------- RAK3172 TX
+// GND ------------------- GND
+//
+// NOTE:
+// The GPIO numbers below are placeholders.
+// Change them according to your actual ESP32-S3 wiring.
+//
 
-
+// ---------------------------------------------------------
 // Include the required libraries.
-#include <MKRGSM.h>
-#include <SPI.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SH110X.h>
+// ---------------------------------------------------------
+
+#include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-// Define the APN (Access Point Name) information:
-// https://apn.how/
-#define PINNUMBER     ""
-#define GPRS_APN      "internet"
-#define GPRS_LOGIN    ""
-#define GPRS_PASSWORD ""
+// ---------------------------------------------------------
+// Define the water quality sensor pins.
+// ---------------------------------------------------------
 
-// Initialize the GSM and GPRS instances:
-GSMSSLClient client;
-GPRS gprs;
-GSM gsmAccess;
+#define NITRATE_SENSOR_PIN       1
+#define pH_sensor               2
+#define TURBIDITY_SENSOR_PIN    4
+#define CONDUCTIVITY_SENSOR_PIN 5
 
-// Define the URL, path, and port (for example, arduino.cc):
-char server[] = "www.theamplituhedron.com";
-String path = "/water_pollution_data_logger/";
-int port = 443; // port 443 is the default for HTTPS
+// DS18B20 temperature sensor
+#define ONE_WIRE_BUS             6
 
-// Define the SH1106 screen settings:
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_MOSI     MOSI
-#define OLED_CLK      SCK
-#define OLED_DC       11
-#define OLED_CS       12
-#define OLED_RST      10
+// ---------------------------------------------------------
+// Define LoRa RAK3172 UART pins.
+// ---------------------------------------------------------
 
-// Create the SH1106 OLED screen.
-Adafruit_SH1106G display = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, OLED_MOSI, OLED_CLK, OLED_DC, OLED_RST, OLED_CS);
+#define LORA_RX_PIN              18
+#define LORA_TX_PIN              17
 
-// Define monochrome graphics:
-static const unsigned char PROGMEM _error [] = {
-0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0xE0, 0x07, 0x00, 0x01, 0x80, 0x01, 0x80,
-0x06, 0x00, 0x00, 0x60, 0x0C, 0x00, 0x00, 0x30, 0x08, 0x01, 0x80, 0x10, 0x10, 0x03, 0xC0, 0x08,
-0x30, 0x02, 0x40, 0x0C, 0x20, 0x02, 0x40, 0x04, 0x60, 0x02, 0x40, 0x06, 0x40, 0x02, 0x40, 0x02,
-0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02,
-0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x03, 0xC0, 0x02, 0x40, 0x01, 0x80, 0x02,
-0x40, 0x00, 0x00, 0x02, 0x60, 0x00, 0x00, 0x06, 0x20, 0x01, 0x80, 0x04, 0x30, 0x03, 0xC0, 0x0C,
-0x10, 0x03, 0xC0, 0x08, 0x08, 0x01, 0x80, 0x10, 0x0C, 0x00, 0x00, 0x30, 0x06, 0x00, 0x00, 0x60,
-0x01, 0x80, 0x01, 0x80, 0x00, 0xE0, 0x07, 0x00, 0x00, 0x3F, 0xFC, 0x00, 0x00, 0x00, 0x00, 0x00
-};
+#define LORA_BAUDRATE            115200
 
-static const unsigned char PROGMEM water [] = {
-0x3F, 0xFF, 0xFF, 0xFC, 0x7F, 0xFF, 0xFF, 0xFE, 0x60, 0x00, 0x00, 0x06, 0x60, 0x00, 0x00, 0x06,
-0x70, 0x00, 0x00, 0x0E, 0x70, 0x00, 0x00, 0x0C, 0x30, 0x01, 0x80, 0x0C, 0x30, 0x01, 0x80, 0x0C,
-0x30, 0x03, 0xC0, 0x0C, 0x30, 0x03, 0xC0, 0x0C, 0x38, 0x07, 0xE0, 0x1C, 0x38, 0x0F, 0xF0, 0x18,
-0x18, 0x1F, 0xF8, 0x18, 0x18, 0x3F, 0xFC, 0x18, 0x18, 0x7F, 0xFE, 0x18, 0x18, 0xFF, 0xFE, 0x18,
-0x18, 0xFF, 0xFF, 0x38, 0x1D, 0xFF, 0xFF, 0x30, 0x0D, 0xFF, 0xFF, 0xB0, 0x0D, 0xFF, 0xFF, 0xB0,
-0x0D, 0xDF, 0xFF, 0xB0, 0x0D, 0xDF, 0xFF, 0xB0, 0x0D, 0xDF, 0xFF, 0x70, 0x0E, 0xEF, 0xFF, 0x60,
-0x0E, 0xE7, 0xFF, 0x60, 0x06, 0x70, 0xFE, 0x60, 0x06, 0x3E, 0xFC, 0x60, 0x06, 0x1F, 0xF8, 0x60,
-0x06, 0x07, 0xE0, 0xE0, 0x07, 0x00, 0x00, 0xC0, 0x03, 0xFF, 0xFF, 0xC0, 0x01, 0xFF, 0xFF, 0x80
-};
+// Create LoRa serial instance.
+HardwareSerial LoRaSerial(1);
 
-const unsigned char source [] = {
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x40, 0x48, 0x00, 0x00, 0x00,
-0x60, 0x84, 0x00, 0x00, 0x00, 0x41, 0x02, 0x00, 0x00, 0x00, 0x62, 0x31, 0x00, 0x00, 0x00, 0x44,
-0x78, 0x80, 0x00, 0x00, 0x08, 0xFC, 0x40, 0x00, 0x00, 0x11, 0xFE, 0x20, 0x00, 0x00, 0x23, 0xFF,
-0x10, 0x00, 0x00, 0x47, 0xFF, 0x88, 0x00, 0x00, 0x8F, 0xFF, 0xC4, 0x00, 0x01, 0x1F, 0xFF, 0xE2,
-0x00, 0x06, 0x3F, 0xFF, 0xF1, 0x00, 0x00, 0x7F, 0xFF, 0xF0, 0x00, 0x00, 0x70, 0x3F, 0xF0, 0x00,
-0x00, 0x60, 0x1F, 0xF0, 0x00, 0x00, 0x67, 0x9F, 0xF0, 0x00, 0x00, 0x67, 0x9F, 0x80, 0x00, 0x00,
-0x67, 0x9F, 0x07, 0x00, 0x00, 0x67, 0x9E, 0x3F, 0xC0, 0x0E, 0x67, 0x9C, 0x78, 0xF0, 0x1E, 0x67,
-0x98, 0xF0, 0xF0, 0x18, 0x67, 0x99, 0xF0, 0x78, 0x30, 0x00, 0x01, 0xE2, 0x78, 0x30, 0x00, 0x01,
-0xE6, 0x7C, 0x30, 0x00, 0x01, 0xE7, 0x3C, 0x30, 0x00, 0x01, 0xCF, 0x3C, 0x30, 0x00, 0x01, 0xCF,
-0x3C, 0x30, 0x07, 0x81, 0xCF, 0x38, 0x30, 0x1F, 0xC1, 0xC7, 0x38, 0x30, 0x1C, 0xE0, 0xE0, 0x30,
-0x30, 0x30, 0x60, 0x70, 0x70, 0x30, 0x30, 0x30, 0x3F, 0xC0, 0x30, 0x30, 0x30, 0x0F, 0x00, 0x38,
-0x70, 0x30, 0x00, 0x00, 0x1C, 0xE0, 0x00, 0x00, 0x00, 0x0F, 0xE0, 0x00, 0x00, 0x00, 0x07, 0x80,
-0xF8, 0x00, 0x00, 0x00, 0x00, 0xF8, 0x00, 0x00, 
-};
+// ---------------------------------------------------------
+// Initialize the DS18B20 temperature sensor.
+// ---------------------------------------------------------
 
-
-// Define timers for water quality sensors.
-unsigned long read_timer, data_timer;
-
-// Define the water quality sensor pins:  
-#define orp_sensor A1
-#define pH_sensor A2
-#define tds_sensor A3
-#define turbidity_sensor A4
-
-// Define the ORP sensor settings:
-#define orp_offset 21
-#define orp_voltage 3.3
-#define orp_voltage_calibration 95
-#define orp_array_length 40
-int orp_array_index = 0, orp_array[orp_array_length];
-
-// Define the pH sensor settings:
-#define pH_offset 0.19
-#define pH_voltage 3.3
-#define pH_voltage_calibration 2.85
-#define pH_array_length 40
-int pH_array_index = 0, pH_array[pH_array_length];
-
-// Define the TDS sensor settings:
-#define tds_voltage 3.3  
-#define tds_array_length 30
-int tds_array[tds_array_length], tds_array_temp[tds_array_length];
-int tds_array_index = -1;
-
-// Define the DS18B20 waterproof temperature sensor settings:
-#define ONE_WIRE_BUS 1
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 
-// Define the turbidity sensor settings:
+// ---------------------------------------------------------
+// Define timers for water quality sensors.
+// ---------------------------------------------------------
+
+unsigned long read_timer, data_timer;
+
+// ---------------------------------------------------------
+// Define ADC settings for ESP32-S3.
+// ---------------------------------------------------------
+
+#define ADC_MAX_VALUE 4095.0
+#define ADC_VOLTAGE   3.3
+
+// ---------------------------------------------------------
+// Define the pH sensor settings.
+// ---------------------------------------------------------
+
+#define pH_offset              0.19
+#define pH_voltage_calibration 2.85
+
+// ---------------------------------------------------------
+// Define turbidity sensor settings.
+// ---------------------------------------------------------
+
 #define turbidity_calibration 0.65
 
-// Define the control buttons: 
-#define BUTTON_1   5
-#define BUTTON_2   6
-#define BUTTON_3   7
+// ---------------------------------------------------------
+// Define general nitrate sensor settings.
+// ---------------------------------------------------------
 
-// Define the RGB pins:
-#define redPin     2
-#define greenPin   3
-#define bluePin    4
+// These values are intentionally kept general.
+// They MUST be calibrated when the actual nitrate sensor
+// and its interface are finalized.
 
-// Define the data holders:
-double orp_value, orp_r_value;
-float pH_value, pH_r_value, tds_value, temperature, turbidity_value, NTU;
+#define NITRATE_VOLTAGE_MIN    0.0
+#define NITRATE_VALUE_MIN      0.0
+
+#define NITRATE_VOLTAGE_MAX    3.3
+#define NITRATE_VALUE_MAX      100.0
+
+// ---------------------------------------------------------
+// Define general conductivity sensor settings.
+// ---------------------------------------------------------
+
+// These values are intentionally kept general.
+// They MUST be calibrated according to the actual
+// conductivity sensor/interface.
+
+#define CONDUCTIVITY_VOLTAGE_MIN  0.0
+#define CONDUCTIVITY_VALUE_MIN    0.0
+
+#define CONDUCTIVITY_VOLTAGE_MAX  3.3
+#define CONDUCTIVITY_VALUE_MAX    2000.0
+
+// ---------------------------------------------------------
+// Define the data holders.
+// ---------------------------------------------------------
+
+float nitrate_value;
+float pH_value;
+float temperature;
+float turbidity_value;
+float NTU;
+float conductivity_value;
+
+// ---------------------------------------------------------
+// Setup
+// ---------------------------------------------------------
 
 void setup(){
-  Serial.begin(9600);
 
-  pinMode(tds_sensor, INPUT);
-  pinMode(BUTTON_1, INPUT_PULLUP);
-  pinMode(BUTTON_2, INPUT_PULLUP);
-  pinMode(BUTTON_3, INPUT_PULLUP);
-  pinMode(redPin, OUTPUT);
-  pinMode(greenPin, OUTPUT);
-  pinMode(bluePin, OUTPUT);
-  adjustColor(0,0,0);
+  Serial.begin(115200);
 
-  // Initialize the DS18B20 sensor.
+  // Initialize analog sensor pins.
+  pinMode(NITRATE_SENSOR_PIN, INPUT);
+  pinMode(pH_sensor, INPUT);
+  pinMode(TURBIDITY_SENSOR_PIN, INPUT);
+  pinMode(CONDUCTIVITY_SENSOR_PIN, INPUT);
+
+  // Initialize the DS18B20 temperature sensor.
   DS18B20.begin();
-  
-  // Initialize the SH1106 screen:
-  display.begin(0, true);
-  display.display();
+
+  // Initialize LoRa RAK3172.
+  LoRaSerial.begin(
+    LORA_BAUDRATE,
+    SERIAL_8N1,
+    LORA_RX_PIN,
+    LORA_TX_PIN
+  );
+
   delay(1000);
 
-  display.clearDisplay();   
-  display.setTextSize(2); 
-  display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.setCursor(0,0);
-  display.println("Water");
-  display.println("Pollution");
-  display.println("Monitor");
-  display.display();
-  delay(1000);
+  Serial.println();
+  Serial.println("=================================");
+  Serial.println(" Water Quality Monitoring System");
+  Serial.println(" ESP32-S3 + LoRa RAK3172");
+  Serial.println("=================================");
+  Serial.println();
 
-  // Start the modem and attach the Arduino MKR GSM 1400 to the GPRS network with the APN, login, and password variables.
-  bool connected = false;
-  // Uncomment to debug errors with AT commands.
-  //MODEM.debug(); 
-  while(!connected){
-    if((gsmAccess.begin(PINNUMBER) == GSM_READY) && (gprs.attachGPRS(GPRS_APN, GPRS_LOGIN, GPRS_PASSWORD) == GPRS_READY)){
-      connected = true;
-    }else{
-      Serial.println("GSM Modem: Not connected!\n");
-      err_msg();
-      delay(1000);
-    }
-  }
-  // After connecting to the GPRS network successfully:
-  Serial.println("GSM Modem: Connected successfully to the GPRS network!\n");
-  display.clearDisplay();   
-  display.setTextSize(1); 
-  display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.setCursor(0,20);
-  display.println("GSM Modem: Connected successfully to the GPRS network!");
-  display.display();
-  adjustColor(0,0,255);
-  delay(2000);
-  display.invertDisplay(true);
-  delay(2000);
-  display.invertDisplay(false);
-  delay(2000);
-  adjustColor(0,0,0);
+  Serial.println("Sensors:");
+  Serial.println("Nitrate");
+  Serial.println("pH");
+  Serial.println("Temperature");
+  Serial.println("Turbidity");
+  Serial.println("Conductivity");
+  Serial.println();
 
-  // Update timers:
-  read_timer = millis(); data_timer = millis();
-  
+  // Update timers.
+  read_timer = millis();
+  data_timer = millis();
+
 }
+
+// ---------------------------------------------------------
+// Main Loop
+// ---------------------------------------------------------
 
 void loop(){
-  if(millis() - read_timer > 20){
-    // Calculate the ORP measurement every 20 milliseconds.
-    orp_array[orp_array_index++] = analogRead(orp_sensor);
-    if(orp_array_index == orp_array_length) orp_array_index = 0;
-    orp_value = ((30*(double)orp_voltage*1000)-(75*avr_arr(orp_array, orp_array_length)*orp_voltage*1000/1024))/75-orp_offset;
-    
-    // Calculate the pH measurement every 20 milliseconds.
-    pH_array[pH_array_index++] = analogRead(pH_sensor);
-    if(pH_array_index == pH_array_length) pH_array_index = 0;
-    float pH_output = avr_arr(pH_array, pH_array_length) * pH_voltage / 1024;
-    pH_value = 3.5 * pH_output + pH_offset;
 
-    // Calculate the TDS measurement every 20 milliseconds.
-    tds_array[tds_array_index++] = analogRead(tds_sensor);
-    if(tds_array_index == tds_array_length) tds_array_index = 0;
-    
-    // Update the timer.  
+  // -------------------------------------------------------
+  // Read sensor values periodically.
+  // -------------------------------------------------------
+
+  if(millis() - read_timer > 100){
+
+    // Read nitrate measurement.
+    nitrate_value = readNitrate();
+
+    // Read pH measurement.
+    pH_value = readPH();
+
+    // Read temperature measurement.
+    temperature = readTemperature();
+
+    // Read turbidity measurement.
+    NTU = readTurbidity();
+
+    // Read conductivity measurement.
+    conductivity_value = readConductivity();
+
+    // Update timer.
     read_timer = millis();
   }
-  
-  if(millis() - data_timer > 800){
-    // Get the accurate ORP measurement every 800 milliseconds.
-    orp_r_value = orp_value + orp_voltage_calibration;
-    Serial.print("ORP: "); Serial.print((int)orp_r_value); Serial.println(" mV");
-    
-    // Get the accurate pH measurement every 800 milliseconds.
-    pH_r_value = pH_value + pH_voltage_calibration;
-    Serial.print("pH: "); Serial.println(pH_r_value);
 
-    // Get the temperature value in Celsius. 
-    DS18B20.requestTemperatures(); 
-    temperature = DS18B20.getTempCByIndex(0);
-    Serial.print("Temperature: "); Serial.print(temperature); Serial.println(" C");
+  // -------------------------------------------------------
+  // Display / transmit accurate measurements.
+  // -------------------------------------------------------
 
-    // Get the accurate TDS measurement every 800 milliseconds.
-    for(int i=0; i<tds_array_length; i++) tds_array_temp[i] = tds_array[i];
-    float tds_average_voltage = getMedianNum(tds_array_temp, tds_array_length) * (float)tds_voltage / 1024.0;
-    float compensationCoefficient = 1.0 + 0.02 * (temperature - 25.0);
-    float compensatedVoltage = tds_average_voltage / compensationCoefficient;
-    tds_value = (133.42*compensatedVoltage*compensatedVoltage*compensatedVoltage - 255.86*compensatedVoltage*compensatedVoltage + 857.39*compensatedVoltage)*0.5;
-    Serial.print("TDS: "); Serial.print(tds_value); Serial.println(" ppm");
+  if(millis() - data_timer > 1000){
 
-    // Get the accurate turbidity measurement every 800 milliseconds.
-    turbidity_value = analogRead(turbidity_value) * (3.3 / 1024.0) + turbidity_calibration;
-    NTU = -(1120.4*turbidity_value*turbidity_value) + (5742.3*turbidity_value) - 4352.9;
-    NTU = NTU / 1000;
-    Serial.print("Turbidity: "); Serial.print(NTU); Serial.println(" NTU");
+    Serial.println("---------------------------------");
 
-    // Update the timer.
+    Serial.print("Nitrate: ");
+    Serial.print(nitrate_value);
+    Serial.println(" mg/L");
+
+    Serial.print("pH: ");
+    Serial.println(pH_value);
+
+    Serial.print("Temperature: ");
+    Serial.print(temperature);
+    Serial.println(" C");
+
+    Serial.print("Turbidity: ");
+    Serial.print(NTU);
+    Serial.println(" NTU");
+
+    Serial.print("Conductivity: ");
+    Serial.print(conductivity_value);
+    Serial.println(" uS/cm");
+
+    Serial.println("---------------------------------");
+    Serial.println();
+
+    // Transmit the sensor data through LoRa.
+    sendLoRaData();
+
+    // Update timer.
     data_timer = millis();
-    Serial.println("");
   }
-  
-  // Display the sensor measurements on the OLED screen.
+
+  // Display sensor measurements.
   show_sensor_measurements();
 
-  // Transmit the data packet to the PHP application with the selected pollution class:
-  if(!digitalRead(BUTTON_1)) make_a_get_request("0"); 
-  if(!digitalRead(BUTTON_2)) make_a_get_request("1"); 
-  if(!digitalRead(BUTTON_3)) make_a_get_request("2"); 
-
 }
 
-void make_a_get_request(String pollution){
-  if(client.connect(server, port)){
-    Serial.println("GSM Modem: Connected to the server!");
-    // Update the path to transfer the given data packet accurately:
-    path = path + "?orp=" + String(int(orp_r_value)) + "&pH=" + String(pH_r_value) + "&tds=" + String(tds_value) + "&turbidity=" + String(NTU) + "&pollution=" + pollution;
-    // Make an HTTPS request to the given server:
-    client.print("GET ");
-    client.print(path);
-    client.println(" HTTP/1.1");
-    client.print("Host: ");
-    client.println(server);
-    client.println("Connection: close");
-    client.println();
-    adjustColor(255,255,0); delay(500); adjustColor(0,0,0);
-  }else{
-    // If the GSM modem cannot connect to the given server:
-    Serial.println("GSM Modem: Cannot connect to the server!\n");
-    err_msg();
-  }
-  delay(2000);
-  // If there is a response from the server:
-  String response = "";
-  while(client.available()) response += (char)client.read();
-  Serial.println(response);
-  // If the PHP application saves the transferred data packet to the given CSV file successfully:
-  if(response && response.indexOf("The given data packet is added to") > 0){
-    display.clearDisplay();   
-    display.drawBitmap((SCREEN_WIDTH/2)-(40/2), 0, source, 40, 40, SH110X_WHITE);
-    display.setTextSize(1); 
-    display.setTextColor(SH110X_WHITE);
-    display.setCursor(30,42);
-    display.print("Data Saved!");
-    display.setCursor(30,52);
-    display.print("Pollution: "); display.print(pollution);
-    display.display();
-    adjustColor(0,255,0);
-    delay(2000);
-    display.invertDisplay(true);
-    delay(2000);
-    display.invertDisplay(false);
-    delay(2000); 
-    adjustColor(0,0,0);
-  }else{
-    Serial.println("GSM Modem: No response from the server!\n");
-    err_msg();
-  }
-  // If the server is disconnected, stop the client:
-  if(!client.available() && !client.connected()){
-    Serial.println("GSM Modem: Disconnecting from the server!\n");
-    client.stop();
-  }
+// =========================================================
+// SENSOR FUNCTIONS
+// =========================================================
+
+// ---------------------------------------------------------
+// Read Nitrate
+// ---------------------------------------------------------
+
+float readNitrate(){
+
+  int rawValue = analogRead(NITRATE_SENSOR_PIN);
+
+  float voltage =
+    ((float)rawValue / ADC_MAX_VALUE) * ADC_VOLTAGE;
+
+  /*
+     GENERAL PLACEHOLDER CALIBRATION
+
+     This converts the sensor voltage linearly into a
+     nitrate concentration.
+
+     IMPORTANT:
+     This is NOT the final scientific calibration.
+
+     Once the actual nitrate sensor/interface is known,
+     replace this equation with its calibration equation.
+  */
+
+  float nitrate =
+    NITRATE_VALUE_MIN +
+    ((voltage - NITRATE_VOLTAGE_MIN) /
+    (NITRATE_VOLTAGE_MAX - NITRATE_VOLTAGE_MIN)) *
+    (NITRATE_VALUE_MAX - NITRATE_VALUE_MIN);
+
+  if(nitrate < 0)
+    nitrate = 0;
+
+  return nitrate;
 }
+
+// ---------------------------------------------------------
+// Read pH
+// ---------------------------------------------------------
+
+float readPH(){
+
+  int rawValue = analogRead(pH_sensor);
+
+  float pH_output =
+    ((float)rawValue / ADC_MAX_VALUE) * ADC_VOLTAGE;
+
+  /*
+     Based on the calibration structure of the reference
+     code.
+
+     Original reference:
+     pH_value = 3.5 * pH_output + pH_offset
+
+     and then:
+     pH_r_value = pH_value + pH_voltage_calibration
+  */
+
+  float pH =
+    3.5 * pH_output +
+    pH_offset +
+    pH_voltage_calibration;
+
+  return pH;
+}
+
+// ---------------------------------------------------------
+// Read Temperature
+// ---------------------------------------------------------
+
+float readTemperature(){
+
+  DS18B20.requestTemperatures();
+
+  float temperatureValue =
+    DS18B20.getTempCByIndex(0);
+
+  return temperatureValue;
+}
+
+// ---------------------------------------------------------
+// Read Turbidity
+// ---------------------------------------------------------
+
+float readTurbidity(){
+
+  int rawValue =
+    analogRead(TURBIDITY_SENSOR_PIN);
+
+  float voltage =
+    ((float)rawValue / ADC_MAX_VALUE) * ADC_VOLTAGE;
+
+  /*
+     General turbidity calculation.
+
+     The original reference used a polynomial based on
+     the turbidity sensor voltage:
+
+     NTU = -(1120.4 * V^2)
+           + (5742.3 * V)
+           - 4352.9
+
+     The same general calibration approach is retained.
+  */
+
+  float turbidity =
+    -(1120.4 * voltage * voltage) +
+    (5742.3 * voltage) -
+    4352.9;
+
+  // Apply reference calibration offset.
+  turbidity = turbidity + turbidity_calibration;
+
+  // Prevent negative turbidity values.
+  if(turbidity < 0)
+    turbidity = 0;
+
+  return turbidity;
+}
+
+// ---------------------------------------------------------
+// Read Conductivity
+// ---------------------------------------------------------
+
+float readConductivity(){
+
+  int rawValue =
+    analogRead(CONDUCTIVITY_SENSOR_PIN);
+
+  float voltage =
+    ((float)rawValue / ADC_MAX_VALUE) * ADC_VOLTAGE;
+
+  /*
+     GENERAL PLACEHOLDER CALIBRATION
+
+     This is a temporary linear conversion.
+
+     Once the actual conductivity module is selected,
+     replace this with the sensor's actual calibration
+     equation.
+
+     Output unit:
+     uS/cm
+  */
+
+  float conductivity =
+    CONDUCTIVITY_VALUE_MIN +
+    ((voltage - CONDUCTIVITY_VOLTAGE_MIN) /
+    (CONDUCTIVITY_VOLTAGE_MAX - CONDUCTIVITY_VOLTAGE_MIN)) *
+    (CONDUCTIVITY_VALUE_MAX - CONDUCTIVITY_VALUE_MIN);
+
+  if(conductivity < 0)
+    conductivity = 0;
+
+  return conductivity;
+}
+
+// =========================================================
+// DISPLAY SENSOR MEASUREMENTS
+// =========================================================
 
 void show_sensor_measurements(){
-  display.clearDisplay();   
-  display.drawBitmap(SCREEN_WIDTH-32, (SCREEN_HEIGHT-32)/2, water, 32, 32, SH110X_WHITE);
-  display.setTextSize(1); 
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(0,5);
-  display.print("ORP: "); display.print(int(orp_r_value)); display.println("mV");
-  display.print("pH: "); display.println(pH_r_value); display.println();
-  display.print("Temp: "); display.print(temperature); display.println("*C\n");
-  display.print("TDS: "); display.print(tds_value); display.println("ppm");
-  display.print("Turbidity: "); display.print(turbidity_value); display.println("V");
-  display.display();
-  delay(100);
+
+  /*
+     No OLED is used here because the current circuit
+     shows the authority desktop as the final display.
+
+     Sensor values are therefore sent through Serial
+     and LoRa.
+  */
+
 }
 
-double avr_arr(int* arr, int number){
-  int i, max, min;
-  double avg;
-  long amount=0;
-  if(number<=0){ Serial.println("ORP Sensor Error: 0"); return 0; }
-  if(number<5){
-    for(i=0; i<number; i++){
-      amount+=arr[i];
-    }
-    avg = amount/number;
-    return avg;
-  }else{
-    if(arr[0]<arr[1]){ min = arr[0];max=arr[1]; }
-    else{ min = arr[1]; max = arr[0]; }
-    for(i=2; i<number; i++){
-      if(arr[i]<min){ amount+=min; min=arr[i];}
-      else{
-        if(arr[i]>max){ amount+=max; max=arr[i]; } 
-        else{
-          amount+=arr[i];
-        }
-      }
-    }
-    avg = (double)amount/(number-2);
-  }
-  return avg;
-}
+// =========================================================
+// LORA DATA TRANSMISSION
+// =========================================================
 
-int getMedianNum(int bArray[], int iFilterLen){  
-  int bTab[iFilterLen];
-  for (byte i = 0; i<iFilterLen; i++) bTab[i] = bArray[i];
-  int i, j, bTemp;
-  for (j = 0; j < iFilterLen - 1; j++) {
-    for (i = 0; i < iFilterLen - j - 1; i++){
-      if (bTab[i] > bTab[i + 1]){
-        bTemp = bTab[i];
-        bTab[i] = bTab[i + 1];
-        bTab[i + 1] = bTemp;
-      }
-    }
-  }
-  if ((iFilterLen & 1) > 0) bTemp = bTab[(iFilterLen - 1) / 2];
-  else bTemp = (bTab[iFilterLen / 2] + bTab[iFilterLen / 2 - 1]) / 2;
-  return bTemp;
-}
+void sendLoRaData(){
 
-void err_msg(){
-  // Show the error message on the SH1106 screen.
-  display.clearDisplay();   
-  display.drawBitmap(48, 0, _error, 32, 32, SH110X_WHITE);
-  display.setTextSize(1); 
-  display.setTextColor(SH110X_WHITE);
-  display.setCursor(0,40); 
-  display.println("Check the serial monitor to see the error!");
-  display.display(); 
-  adjustColor(255,0,0);
-  delay(1000);
-  display.invertDisplay(true);
-  delay(1000);
-  display.invertDisplay(false);
-  delay(1000); 
-  adjustColor(0,0,0);
-}
+  /*
+     Create one compact data packet.
 
-void adjustColor(int r, int g, int b){
-  analogWrite(redPin, (255-r));
-  analogWrite(greenPin, (255-g));
-  analogWrite(bluePin, (255-b));
+     Example:
+
+     Nitrate=25.4,
+     pH=7.12,
+     Temp=27.3,
+     Turbidity=12.5,
+     Conductivity=630.2
+  */
+
+  String dataPacket = "";
+
+  dataPacket += "Nitrate=";
+  dataPacket += String(nitrate_value, 2);
+
+  dataPacket += ",pH=";
+  dataPacket += String(pH_value, 2);
+
+  dataPacket += ",Temp=";
+  dataPacket += String(temperature, 2);
+
+  dataPacket += ",Turbidity=";
+  dataPacket += String(NTU, 2);
+
+  dataPacket += ",Conductivity=";
+  dataPacket += String(conductivity_value, 2);
+
+  // Display packet on Serial Monitor.
+  Serial.println("LoRa Packet:");
+  Serial.println(dataPacket);
+
+  /*
+     RAK3172 LoRa transmission command goes here.
+
+     The exact command depends on whether the RAK3172
+     is configured for LoRaWAN or LoRa P2P mode.
+
+     For now the packet is prepared and sent to the
+     RAK3172 UART.
+
+     Configure the RAK3172 communication mode before
+     enabling the actual AT transmission command.
+  */
+
+  LoRaSerial.println(dataPacket);
 }
