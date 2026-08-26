@@ -1,13 +1,13 @@
 /////////////////////////////////////////////////////////////
-//           WATER QUALITY MONITORING SYSTEM                  //
-//                       TinyML MODEL + LoRa RAK3172                      //
-//                               ESP32-S3 DevKit                                    //
-//                          --------------------------------                        //
-//             Sensors: Nitrate, pH, Temperature, Turbidity,           //
-//                                      Conductivity                                    //
-//                                                                                            //
-//                       TinyML Output Classes:                                  //
-//                          Clean / Risky / Polluted                               //
+//           WATER QUALITY MONITORING SYSTEM               //
+//             TinyML MODEL + LoRa RAK3172                 //
+//                     ESP32-S3 DevKit                     //
+//         --------------------------------                //
+//        Sensors: Nitrate, pH, Temperature, Turbidity,    //
+//                        Conductivity                     //
+//                                                         //
+//                 TinyML Output Classes:                  //
+//                Clean / Risky / Polluted                 //
 /////////////////////////////////////////////////////////////
 
 //
